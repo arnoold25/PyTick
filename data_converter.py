@@ -4,13 +4,13 @@ from pathlib import Path
 
 import numpy as np
 
-US_PER_HOUR = 3_600 * 1_000_000  # Mikrosekunden pro Stunde
+US_PER_HOUR = 3_600 * 1_000_000  # microseconds per hour
 _BI5_DTYPE = np.dtype([
-    ("ms",      ">u4"),  # Millisekunden ab Stundenbeginn der Datei
-    ("ask",     ">u4"),  # punkt-skalierter Integer-Preis
-    ("bid",     ">u4"),  # punkt-skalierter Integer-Preis
-    ("ask_vol", ">f4"),  # Ask-Volumen (Mio. Basiswährung)
-    ("bid_vol", ">f4"),  # Bid-Volumen (Mio. Basiswährung)
+    ("ms",      ">u4"),  # milliseconds from the start of the hour
+    ("ask",     ">u4"),  # point-scaled integer price
+    ("bid",     ">u4"),  # point-scaled integer price
+    ("ask_vol", ">f4"),  # ask volume (millions of base currency)
+    ("bid_vol", ">f4"),  # bid volume (millions of base currency)
 ])
 POINT_DIVISOR: dict[str, float] = {
     "EURUSD": 100_000, "GBPUSD": 100_000, "AUDUSD": 100_000,
@@ -22,13 +22,12 @@ _COLUMNS = ("ts", "bid", "ask", "bid_vol", "ask_vol")
 
 class Bi5Converter:
     """
-    Konvertiert ein Verzeichnis LZMA-komprimierter Dukascopy-.bi5-Dateien in
-    ein Struct-of-Arrays-Layout: eine .npy pro Spalte plus ein dreispaltiger
-    Stunden-Index.
+    Converts a directory of LZMA-compressed Dukascopy .bi5 files into a
+    Struct-of-Arrays layout: one .npy per column plus a three-column hour index.
 
-    Die beiden Stufen sind unabhängig nutzbar:
-      * parse_file(path)  -> eine .bi5 in native numpy-Arrays dekodieren
-      * build()           -> alle Dateien dekodieren, concatenieren, prüfen, schreiben
+    Both stages are usable independently:
+      * parse_file(path)  -> decode a single .bi5 into native numpy arrays
+      * build()           -> decode all files, concatenate, validate, and write
     """
 
     def __init__(
@@ -48,68 +47,67 @@ class Bi5Converter:
             self.divisor = float(POINT_DIVISOR[symbol])
         else:
             raise ValueError(
-                f"Kein Preis-Divisor für {symbol!r} bekannt. divisor=... explizit "
-                f"übergeben (ein falscher Divisor korrumpiert still jeden Preis)."
+                f"No price divisor known for {symbol!r}. Pass divisor=... explicitly "
+                f"(a wrong divisor silently corrupts every price)."
             )
 
-    # --- Einzeldatei-Stufe -------------------------------------------------
+    # --- single-file stage -------------------------------------------------
 
     @staticmethod
     def hour_start_us(filename: str) -> int:
         """
-        Absoluter Stundenbeginn der Datei, in Mikrosekunden seit Epoch.
+        Absolute start of the file's hour, in microseconds since epoch.
 
-        Tickterial-Namensschema: SYMBOL_YYYY-MM-DD_HH(.bi5). Der .bi5-Inhalt
-        speichert nur ms-Offsets innerhalb der Stunde, die absolute Stunde muss
-        also aus dem Dateinamen kommen. Für ein anderes Schema diese Methode
-        überschreiben.
+        Ticktorial naming scheme: SYMBOL_YYYY-MM-DD_HH(.bi5). The .bi5 content
+        only stores ms offsets within the hour, so the absolute hour must be
+        derived from the filename. Override this method for a different naming scheme.
         """
         parts = Path(filename).stem.split("_")
         dt = datetime.strptime(f"{parts[-2]}_{parts[-1]}", "%Y-%m-%d_%H")
-        dt = dt.replace(tzinfo=timezone.utc)             # Dukascopy-Zeiten sind UTC
-        return int(dt.timestamp()) * 1_000_000           # exakt: volle Stunde
+        dt = dt.replace(tzinfo=timezone.utc)             # Dukascopy timestamps are UTC
+        return int(dt.timestamp()) * 1_000_000           # exact: full hour
 
     def parse_file(self, path: str | Path):
         """
-        Dekodiert eine .bi5 in (ts, bid, ask, bid_vol, ask_vol) als native
-        numpy-Arrays. Gibt None für leere Stunden (Wochenende / Markt zu) und
-        für unlesbare Dateien zurück. ts ist absolute int64-Mikrosekunden.
+        Decodes a .bi5 file into (ts, bid, ask, bid_vol, ask_vol) as native
+        numpy arrays. Returns None for empty hours (weekend / market closed) and
+        for unreadable files. ts is absolute int64 microseconds.
         """
         path = Path(path)
         try:
             with lzma.open(path) as f:
                 raw = f.read()
         except (lzma.LZMAError, EOFError):
-            print(f"[skip] korrupt: {path.name}")
+            print(f"  [SKIP]  corrupt ..... {path.name}")
             return None
 
-        if not raw:                                      # gültig, aber leere Stunde
+        if not raw:                                      # valid but empty hour
             return None
-        if len(raw) % _BI5_DTYPE.itemsize:               # abgebrochener Download
-            print(f"[skip] unvollständig: {path.name}")
+        if len(raw) % _BI5_DTYPE.itemsize:               # truncated download
+            print(f"  [SKIP]  incomplete .. {path.name}")
             return None
 
         rec = np.frombuffer(raw, dtype=_BI5_DTYPE)
         base = self.hour_start_us(path.name)
 
-        ts = base + rec["ms"].astype(np.int64) * 1_000   # ms-Offset -> absolute µs
+        ts = base + rec["ms"].astype(np.int64) * 1_000   # ms offset -> absolute µs
         bid = rec["bid"].astype(np.float64) / self.divisor
         ask = rec["ask"].astype(np.float64) / self.divisor
         bid_vol = rec["bid_vol"].astype(np.float64)
         ask_vol = rec["ask_vol"].astype(np.float64)
         return ts, bid, ask, bid_vol, ask_vol
 
-    # --- Gesamtdatensatz-Stufe ---------------------------------------------
+    # --- full dataset stage ------------------------------------------------
 
     def build(self) -> int:
         """
-        Dekodiert jede .bi5 in src_dir, concateniert chronologisch, prüft und
-        schreibt die SoA-Spalten plus den Stunden-Index nach out_dir.
-        Gibt die Anzahl der Ticks zurück.
+        Decodes every .bi5 in src_dir, concatenates chronologically, validates,
+        and writes the SoA columns plus the hour index to out_dir.
+        Returns the total tick count.
         """
-        files = sorted(self.src_dir.iterdir())           # SYMBOL_YYYY-MM-DD_HH sortiert chronologisch
+        files = sorted(self.src_dir.iterdir())           # SYMBOL_YYYY-MM-DD_HH sorts chronologically
         if not files:
-            raise FileNotFoundError(f"Keine Dateien in {self.src_dir}")
+            raise FileNotFoundError(f"No files found in {self.src_dir}")
 
         cols: list[list[np.ndarray]] = [[] for _ in _COLUMNS]
         for path in files:
@@ -120,18 +118,18 @@ class Bi5Converter:
                 bucket.append(arr)
 
         if not cols[0]:
-            raise RuntimeError(f"Keine verwertbaren Ticks für {self.symbol}")
+            raise RuntimeError(f"No usable ticks found for {self.symbol}")
 
-        # HINWEIS: Chunks + Ergebnis liegen kurz gleichzeitig im RAM
-        # (~6-12 GB bei 150M Ticks x5). Für knapperen Speicher: Längen in einem
-        # ersten Pass summieren, dann in np.lib.format.open_memmap-Arrays schreiben.
+        # NOTE: chunks and result briefly coexist in RAM
+        # (~6-12 GB for 150M ticks x5). For tighter memory: sum lengths in a
+        # first pass, then write into np.lib.format.open_memmap arrays.
         ts, bid, ask, bid_vol, ask_vol = (np.concatenate(c) for c in cols)
 
-        # --- Korrektheits-Guards: billiger als ein stiller Bug ---
-        assert np.all(np.diff(ts) >= 0), "Timestamps nicht monoton - Dateireihenfolge prüfen"
+        # --- correctness guards: cheaper than a silent bug ---
+        assert np.all(np.diff(ts) >= 0), "Timestamps not monotonic - check file order"
         n = len(ts)
-        assert all(len(a) == n for a in (bid, ask, bid_vol, ask_vol)), "Spaltenlängen ungleich"
-        assert (ask >= bid).mean() > 0.99, "ask/bid vermutlich vertauscht"
+        assert all(len(a) == n for a in (bid, ask, bid_vol, ask_vol)), "Column length mismatch"
+        assert (ask >= bid).mean() > 0.99, "ask/bid are likely swapped"
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         np.save(self.out_dir / "ts.npy", ts)
@@ -141,24 +139,26 @@ class Bi5Converter:
         np.save(self.out_dir / "ask_vol.npy", ask_vol)
         np.save(self.out_dir / "index.npy", self._build_index(ts))
 
-        print(f"[done] {self.symbol}: {n:,} Ticks -> {self.out_dir}")
+        print(f"  [ OK ]  {self.symbol:<8}  {n:>13,} ticks  ->  {self.out_dir}")
         return n
 
     @staticmethod
     def _build_index(ts: np.ndarray) -> np.ndarray:
         """
-        Dreispaltiger Stunden-Index [hour_start_us, start_row, end_row) aus dem
-        finalen ts-Array. Zeilen sind halboffen [start, end). Stunden ohne Ticks
-        haben keine Zeile. Setzt sortiertes ts voraus (durch build() garantiert).
+        Three-column hour index [hour_start_us, start_row, end_row) built from
+        the final ts array. Rows are half-open [start, end). Hours without ticks
+        have no row. Requires sorted ts (guaranteed by build()).
         """
-        hours = ts // US_PER_HOUR                        # Integer-Stunden-Bucket pro Tick
-        change = np.flatnonzero(np.diff(hours)) + 1      # erste Zeile jeder neuen Stunde
+        hours = ts // US_PER_HOUR                        # integer hour bucket per tick
+        change = np.flatnonzero(np.diff(hours)) + 1      # first row of each new hour
         starts = np.concatenate(([0], change))
         ends = np.concatenate((change, [len(ts)]))
-        hour_ts = hours[starts] * US_PER_HOUR            # zurück zu absoluten µs
+        hour_ts = hours[starts] * US_PER_HOUR            # back to absolute µs
         return np.column_stack([hour_ts, starts, ends]).astype(np.int64)
 
-
-symbols = [j.name for j in Path("data", "raw").iterdir()]
-for i in symbols:
-    Bi5Converter(i, Path("data", "raw", i), divisor=POINT_DIVISOR[i]).build()
+if __name__ == "__main__":
+    print("  --- Bi5 Converter " + "-" * 40)
+    symbols = [j.name for j in Path("data", "raw").iterdir()]
+    for sym in symbols:
+        Bi5Converter(sym, Path("data", "raw", sym), divisor=POINT_DIVISOR[sym]).build()
+    print("  " + "-" * 58)
