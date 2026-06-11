@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 _ALL_COLUMNS = ("ts", "bid", "ask", "bid_vol", "ask_vol")
@@ -26,6 +26,4 @@ class DataConfig:
 @dataclass(frozen=True)
 class BacktestConfig:
     initial_capital:    float = 100_000
-    capital:            float = initial_capital
-    equity:             float = initial_capital
     leverage:           int = 30

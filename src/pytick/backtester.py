@@ -2,8 +2,7 @@ from pathlib import Path
 import numpy as np
 import time
 
-from config import DataConfig, BacktestConfig
-from data_loader import DataLoader
+from pytick import DataConfig, BacktestConfig, DataLoader
 
 class Backtester:
     def __init__(self, data_config: DataConfig, backtest_config: BacktestConfig) -> None:
@@ -42,10 +41,11 @@ class Backtester:
             pass
         print(f"Time:   {time.perf_counter() - t0:.3f}s")
 
-Backtester(
-    DataConfig(
-        data_dir=Path("data", "npy"),
-        symbols=("EURUSD", "AUDUSD"),
-    ),
-    BacktestConfig(),
-).run()
+if __name__ == "__main__":
+    Backtester(
+        DataConfig(
+            data_dir=Path("data", "npy"),
+            symbols=("EURUSD", "AUDUSD"),
+        ),
+        BacktestConfig(),
+    ).run()

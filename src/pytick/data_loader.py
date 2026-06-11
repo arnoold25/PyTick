@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 
-from config import DataConfig
+from pytick import DataConfig
 
 class DataLoader:
     def __init__(self, config: DataConfig) -> None:
@@ -22,7 +22,8 @@ class DataLoader:
         # guards
         if not sym_dir.is_dir(): 
             raise NotADirectoryError(f"Not a valid directory: {sym_dir}")
-        missing = [f"{c}.npy" for c in cols if not (sym_dir / f"{c}.npy").exists() and "index.npy" if not (sym_dir / "index.npy").exists()]
+        required = [f"{c}.npy" for c in cols] + ["index.npy"]
+        missing = [f for f in required if not (sym_dir / f).exists()]
         if missing:
             raise FileNotFoundError(f"Missing files in {sym_dir}: {missing}")
 
