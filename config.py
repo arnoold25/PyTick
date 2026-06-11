@@ -22,3 +22,10 @@ class DataConfig:
         
     def active_columns(self) -> tuple[str, ...]:
         return tuple(c for c in _ALL_COLUMNS if getattr(self, c))
+    
+@dataclass(frozen=True)
+class BacktestConfig:
+    initial_capital:    float = 100_000
+    capital:            float = initial_capital
+    equity:             float = initial_capital
+    leverage:           int = 30

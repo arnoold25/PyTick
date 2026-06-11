@@ -1,7 +1,7 @@
-from config import DataConfig
-
 import numpy as np
 from pathlib import Path
+
+from config import DataConfig
 
 class DataLoader:
     def __init__(self, config: DataConfig) -> None:
@@ -31,7 +31,7 @@ class DataLoader:
         self.data[sym]  = {c: np.load(sym_dir / f"{c}.npy", mmap_mode="r") for c in cols}
 
         # integrity check
-        if len(self.index[sym] == 0):
+        if len(self.index[sym]) == 0:
             raise ValueError("Corrupted files")
         if any(len(self.data[sym][c]) != self.index[sym][-1, 2] for c in cols):
             raise ValueError("Corrupted files")
