@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 
-from pytick import DataConfig
+from .config import DataConfig
 
 class DataLoader:
     def __init__(self, config: DataConfig) -> None:

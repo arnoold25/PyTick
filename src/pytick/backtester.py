@@ -1,8 +1,8 @@
-from pathlib import Path
 import numpy as np
 import time
 
-from pytick import DataConfig, BacktestConfig, DataLoader
+from .config import DataConfig, BacktestConfig
+from .data_loader import DataLoader
 
 class Backtester:
     def __init__(self, data_config: DataConfig, backtest_config: BacktestConfig) -> None:
@@ -23,8 +23,7 @@ class Backtester:
         bid = cols["bid"][start:end]
         return {"open": bid[0], "high": bid.max(), "low": bid.min(), "close": bid[-1]}
 
-    def _iter_hour(self):
-        data = self.loader.data
+    def _iter_hour(self, data):
         for h in self.hours:
             bars = {}
             for sym, span in self.spans.items():
@@ -37,15 +36,8 @@ class Backtester:
 
     def run(self):
         t0 = time.perf_counter()
-        for h, bars in self._iter_hour():
+        data = self.loader.data
+        for h, bars in self._iter_hour(data):
             pass
         print(f"Time:   {time.perf_counter() - t0:.3f}s")
 
-if __name__ == "__main__":
-    Backtester(
-        DataConfig(
-            data_dir=Path("data", "npy"),
-            symbols=("EURUSD", "AUDUSD"),
-        ),
-        BacktestConfig(),
-    ).run()
