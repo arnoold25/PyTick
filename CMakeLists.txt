@@ -14,6 +14,7 @@ find_package(pybind11 CONFIG REQUIRED)
 
 pybind11_add_module(_core
     cpp/bindings.cpp
+    cpp/src/bar_builder.cpp
 )
 
 target_include_directories(_core

@@ -3,6 +3,7 @@ import time
 
 from .config import DataConfig, BacktestConfig
 from .data_loader import DataLoader
+from ._core import make_bar # type: ignore
 
 class Backtester:
     def __init__(self, data_config: DataConfig, backtest_config: BacktestConfig) -> None:
@@ -19,10 +20,6 @@ class Backtester:
             for s in idx
         }
 
-    def _make_bar(self, cols, start, end):
-        bid = cols["bid"][start:end]
-        return {"open": bid[0], "high": bid.max(), "low": bid.min(), "close": bid[-1]}
-
     def _iter_hour(self, data):
         for h in self.hours:
             bars = {}
@@ -31,7 +28,7 @@ class Backtester:
                 if se is None:
                     continue
                 start, end = se
-                bars[sym] = self._make_bar(data[sym], start, end)
+                bars[sym] = make_bar(data[sym]["bid"][start:end])
             yield h, bars
 
     def run(self):
@@ -40,4 +37,3 @@ class Backtester:
         for h, bars in self._iter_hour(data):
             pass
         print(f"Time:   {time.perf_counter() - t0:.3f}s")
-
