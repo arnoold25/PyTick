@@ -21,4 +21,8 @@ target_include_directories(_core
     PRIVATE cpp/include
 )
 
+target_compile_options(_core PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/O2;/arch:AVX2;/fp:fast>
+)
+
 install(TARGETS _core LIBRARY DESTINATION pytick)

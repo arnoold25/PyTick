@@ -71,12 +71,33 @@ bt = Backtester(
 bt.run()
 ```
 
+Alternatively, run the package entry point (configured in `src/pytick/__main__.py`):
+
+```
+python -m pytick
+```
+
+## Performance
+
+Hourly bar building over the full dataset — 275M ticks / ~37k hours:
+
+| Implementation                       | Time    |
+| ------------------------------------ | ------- |
+| Pure Python (numpy per hour)         | ~2.5 s  |
+| C++ core (scalar loop, pybind11)     | ~1.8 s  |
+| C++ core (AVX2-vectorized min/max)   | ~1.35 s |
+
+Measured end-to-end (mmap'ed columns, warm cache) on the development machine.
+The vectorized loop is memory-bound (streaming ~2.5 GB of bid data through
+mmap), so the gain over the scalar loop is modest — the per-tick work is no
+longer the bottleneck.
+
 ## Roadmap
 
 - [x] Dukascopy `.bi5` converter with integrity checks
 - [x] mmap-based SoA data loader, global hour axis across symbols
-- [x] Hourly bar generator (Python placeholder)
-- [ ] Bid/ask OHLC bars in the C++ core
+- [x] Hourly bid OHLC bars in the C++ core (pybind11)
+- [ ] Ask-side bars and volume aggregation
 - [ ] Broker simulation in C++: tick-precise fills, TP/SL ambiguity resolution
       (fast path via bar extrema, slow path via tick scan), prop-firm drawdown
       stop on worst-case hourly equity

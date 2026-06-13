@@ -4,6 +4,11 @@ from pathlib import Path
 from .config import DataConfig
 
 class DataLoader:
+    """
+    Loads each symbol's SoA tick columns as read-only mmap arrays plus the
+    hour index (read eagerly - it is small and accessed constantly).
+    """
+
     def __init__(self, config: DataConfig) -> None:
         self.data:      dict[str, dict[str, np.ndarray]]    = {}
         self.index:     dict[str, np.ndarray]               = {}

@@ -3,7 +3,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
-#include "include/pytick/bar_builder.hpp"
+#include "pytick/bar_builder.hpp"
 
 namespace py = pybind11;
 

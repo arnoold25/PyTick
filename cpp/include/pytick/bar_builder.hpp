@@ -6,4 +6,5 @@
 
 namespace py = pybind11;
 
+// Builds an OHLC bar (dict) from one hour of bid prices.
 py::dict make_bar(py::array_t<double> bid);

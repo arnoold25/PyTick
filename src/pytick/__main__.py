@@ -1,3 +1,5 @@
+"""Package entry point: python -m pytick"""
+
 from pathlib import Path
 
 from .config import DataConfig, BacktestConfig
