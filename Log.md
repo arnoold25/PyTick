@@ -5,6 +5,16 @@ Newest entries first. Benchmark reference dataset: **275M ticks / ~37k hours**
 
 ## 2026-06-13
 
+- **LOC (tracked): 656** — 398 code (311 Python + 87 C++), 215 docs,
+  43 build/config. Code-line growth by commit: 163 (initial pipeline) → 223
+  (loader) → 280 (iterator) → 283 (C++ bridge) → 299 (bug fixes) → 329
+  (make_bar) → 397 (vectorized) → 398 (guard + hot-loop cleanup).
+- `make_bar` guarded against empty input (`ValueError` on `n == 0`). It is now
+  the public on-demand bar primitive: the user slices any price column and calls
+  it directly (`make_bar(data[sym]["bid"][a:b])`), so empty slices are reachable,
+  unlike the internal hour loop. Exposed as a re-export (zero call overhead, no
+  wrapper); the earlier `bar(symbol, hour)` accessor idea was dropped in favor of
+  user-side slicing for arbitrary (not only hour-aligned) windows.
 - `make_bar` vectorized: AVX2 min/max over 4 independent accumulator lanes
   (16 doubles/iteration), raw contiguous pointer instead of the strided
   accessor. Build flags added: `/arch:AVX2 /fp:fast`.

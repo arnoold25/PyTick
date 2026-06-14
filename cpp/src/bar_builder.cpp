@@ -12,6 +12,11 @@ py::dict make_bar(py::array_t<double> bid) {
     const double* p = bid.data();
     const py::ssize_t n = bid.shape(0);
 
+    // user-driven slices can be empty (e.g. a time range with no ticks); the
+    // internal hour loop could not, since the index only holds non-empty hours
+    if (n == 0)
+        throw py::value_error("make_bar: empty array (no ticks in the given range)");
+
     const double open  = p[0];
     const double close = p[n - 1];
 
