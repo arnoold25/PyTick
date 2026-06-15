@@ -3,6 +3,49 @@
 Newest entries first. Benchmark reference dataset: **275M ticks / ~37k hours**
 (EURUSD + AUDUSD, six years of Dukascopy tick data).
 
+## 2026-06-15
+
+Project completed on the `unstable` branch: strategy interface, C++ broker
+simulation and performance metrics. Version bumped `0.1.2` → `0.2.0`.
+
+- **LOC (tracked): 1,381** — 1,067 code (545 Python + 522 C++), 275 docs
+  (README 170 + Log 105), 39 build/config. Code-line growth by commit:
+  163 → 223 → 280 → 283 → 299 →
+  329 → 397 → 398 (on-demand make_bar) → **1,067** (broker + strategy + metrics).
+  The C++ jumped 87 → 522 (the broker is 416 of it: `broker.cpp` 304 +
+  `broker.hpp` 112).
+- **Strategy interface.** New `Strategy` base class: subclass it, override
+  `on_candle(hour, bars)` and hand the class to `bt.run(Strategy)`. `on_candle`
+  fires once per hour with `{symbol: bid OHLC}` for every active symbol; the
+  order helpers (`buy/sell/close/position`, `equity/cash`) forward into the C++
+  broker. `on_tick(symbol, bid, ask)` is opt-in — wired only when the subclass
+  overrides it (`type(s).on_tick is not Strategy.on_tick`); when active the
+  broker scans every tick and calls back into Python (the expensive path).
+- **C++ broker** (`broker.hpp/.cpp`). Holds account state + zero-copy bid/ask
+  views + an hour→row map per symbol. `process_hour(hour)` fills pending orders
+  at the hour's first tick (buy@ask, sell@bid), resolves SL/TP, marks equity to
+  market, and returns `{equity, cash, opened, closed, current}`. SL/TP uses an
+  **extrema-gated fast path** (one O(n) min/max pass; full tick scan only when
+  both stop and target lie inside the hour's range — ambiguous order). Leverage
+  caps position notional at `equity × leverage`; no commission/swap/margin-call
+  in v1. P&L exact in USD for USD-quoted pairs.
+- **make_bar back in the loop.** Reverted the on-demand step: bars are computed
+  automatically per hour (bid-only OHLC) *before* the tick process and passed to
+  `on_candle`. The public re-export stays for ad-hoc slicing. Decision: the
+  ~1 s extra is dwarfed by user-side compute, and it keeps the API simple.
+- **Engine ordering** = the causality guarantee, per hour H: build bars →
+  `broker.process_hour(H)` → `on_candle(H, bars)`. Orders placed at H's close
+  fill in H+1 (tick-precise), never at the open.
+- **Metrics** (`metrics.py`). `BacktestResult` with end capital, return %,
+  total trades / wins / losses, win rate, Sharpe & Sortino (daily equity
+  returns, annualized `√ann_factor`, risk-free `risk_free`). `BacktestConfig`
+  gained `lot_size`, `risk_free`, `ann_factor`.
+- **Verification.** Synthetic broker tests pass exactly: long+TP (+430),
+  short+SL (−920), leverage guard (oversized order rejected), `on_tick` fires
+  once per tick + override detection. Full run on EURUSD/AUDUSD: **~2.3 s warm**
+  (26.6 s cold, page-fault bound), 36,702 hours; the toy example strategy posts
+  3,419 trades / 33% win rate / −18% return (a naive 20:40 bracket — expected).
+
 ## 2026-06-13
 
 - **LOC (tracked): 656** — 398 code (311 Python + 87 C++), 215 docs,

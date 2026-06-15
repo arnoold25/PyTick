@@ -32,3 +32,10 @@ class BacktestConfig:
 
     initial_capital:    float = 100_000
     leverage:           int = 30
+
+    # broker
+    lot_size:           float = 100_000     # base-currency units per standard lot
+
+    # performance metrics
+    risk_free:          float = 0.0         # annual risk-free rate (Sharpe/Sortino)
+    ann_factor:         int = 252           # periods/year to annualize daily returns

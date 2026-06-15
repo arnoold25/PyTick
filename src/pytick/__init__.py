@@ -2,7 +2,17 @@
 
 from .config import DataConfig, BacktestConfig
 from .data_loader import DataLoader
-from .backtester import Backtester
+from .strategy import Strategy
+from .metrics import BacktestResult
+from .backtester import Backtester, make_bar  # type: ignore
 
-__all__ = ["DataConfig", "BacktestConfig", "DataLoader", "Backtester"]
-__version__ = "0.1.2"
+__all__ = [
+    "DataConfig",
+    "BacktestConfig",
+    "DataLoader",
+    "Strategy",
+    "BacktestResult",
+    "Backtester",
+    "make_bar",
+]
+__version__ = "0.2.0"
