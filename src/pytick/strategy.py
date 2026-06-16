@@ -6,41 +6,50 @@ def _price(x) -> float:
     return math.nan if x is None else float(x)
 
 
-class Strategy:
+def _entry(limit, stop) -> tuple[int, float]:
+    """Map (limit, stop) kwargs to the broker's (entry_type, trigger).
+
+    entry_type: 0 = market, 1 = limit, 2 = stop. limit/stop are mutually
+    exclusive; neither means a market order filled at the next tick.
     """
-    Base class for user strategies. Subclass it and override `on_candle`
-    (and optionally `on_tick`); pass the subclass to `Backtester.run`.
+    if limit is not None and stop is not None:
+        raise ValueError("pass at most one of limit= or stop=")
+    if limit is not None:
+        return 1, float(limit)
+    if stop is not None:
+        return 2, float(stop)
+    return 0, math.nan
 
-    The engine binds a C++ broker to the instance before the run, so the
-    order helpers below forward straight into the broker. Orders placed in
-    `on_candle` fill on the next hour's first tick (decide at close, fill
-    next — never look-ahead).
+
+class Context:
+    """The order API handed to callback strategies: ``on_candle(ctx, bars)``.
+
+    Carries the bound C++ broker, so the helpers forward straight into it, plus
+    ``hour`` (the current hour, updated by the engine before each call). Orders
+    placed here fill on the next tick(s) of their symbol — decide at the close,
+    fill next, never look-ahead. The same surface backs the legacy ``Strategy``.
     """
 
-    # --- lifecycle hooks (override these) ---------------------------------
+    def __init__(self, broker) -> None:
+        self._broker = broker
+        self.hour: int = 0
 
-    def on_candle(self, hour: int, bars: dict) -> None:
-        """Called once per hour, after the C++ tick iterator has processed that
-        hour (i.e. at the candle close). `bars` maps each symbol active this
-        hour to its bid OHLC dict (`open/high/low/close`). Default: no-op."""
+    # --- order API --------------------------------------------------------
 
-    def on_tick(self, symbol: str, bid: float, ask: float) -> None:
-        """Opt-in, expensive per-tick hook. Enabled only when a subclass
-        overrides it (detected at run start). When active the broker scans
-        every tick and calls this for each one, so a full-dataset run costs
-        tens of seconds even with an empty body — use it for short windows and
-        feature exploration, not production sweeps. Default: no-op."""
+    def buy(self, symbol: str, lots: float, sl=None, tp=None,
+            limit=None, stop=None) -> None:
+        """Open a long. Market (default) fills at the next tick's ask; pass
+        ``limit=`` (fills when the ask falls to it) or ``stop=`` (when it rises
+        to it) for a pending entry. ``sl``/``tp`` are absolute prices."""
+        et, trig = _entry(limit, stop)
+        self._broker.submit_buy(symbol, float(lots), _price(sl), _price(tp), et, trig)
 
-    # --- order API (do not override) --------------------------------------
-
-    def buy(self, symbol: str, lots: float, sl=None, tp=None) -> None:
-        """Open a long: fills at the next tick's ask. `sl`/`tp` are absolute
-        prices (optional)."""
-        self._broker.submit_buy(symbol, float(lots), _price(sl), _price(tp))
-
-    def sell(self, symbol: str, lots: float, sl=None, tp=None) -> None:
-        """Open a short: fills at the next tick's bid."""
-        self._broker.submit_sell(symbol, float(lots), _price(sl), _price(tp))
+    def sell(self, symbol: str, lots: float, sl=None, tp=None,
+             limit=None, stop=None) -> None:
+        """Open a short. Market fills at the next tick's bid; ``limit=`` fills
+        when the bid rises to it, ``stop=`` when it falls to it."""
+        et, trig = _entry(limit, stop)
+        self._broker.submit_sell(symbol, float(lots), _price(sl), _price(tp), et, trig)
 
     def close(self, symbol: str) -> None:
         """Close every open position on `symbol` at the next tick (market)."""
@@ -57,10 +66,58 @@ class Strategy:
 
     @property
     def cash(self) -> float:
-        """Realized cash (initial capital + closed-trade P&L)."""
+        """Realized cash (initial capital + closed-trade P&L, net of costs)."""
         return self._broker.cash()
+
+
+class Strategy:
+    """Legacy base class (still supported). Subclass it, override `on_candle`
+    (and optionally `on_tick`), and pass the subclass to `Backtester.run`.
+
+    Prefer the callback form for new code — ``bt.run(on_candle=fn)`` with
+    ``fn(ctx, bars)`` — which needs no subclassing. Either way the order helpers
+    below forward into the same C++ broker via a bound `Context`.
+    """
+
+    # --- lifecycle hooks (override these) ---------------------------------
+
+    def on_candle(self, hour: int, bars: dict) -> None:
+        """Called once per hour, after the C++ tick iterator has processed that
+        hour (i.e. at the candle close). `bars` maps each symbol active this
+        hour to its bid OHLC dict (`open/high/low/close`). Default: no-op."""
+
+    def on_tick(self, symbol: str, bid: float, ask: float) -> None:
+        """Opt-in, expensive per-tick hook. Enabled only when a subclass
+        overrides it (detected at run start). When active the broker scans
+        every tick and calls this for each one, so a full-dataset run costs
+        tens of seconds even with an empty body — use it for short windows and
+        feature exploration, not production sweeps. Default: no-op."""
+
+    # --- order API (delegates to the bound Context; do not override) ------
+
+    def buy(self, symbol: str, lots: float, sl=None, tp=None,
+            limit=None, stop=None) -> None:
+        self._ctx.buy(symbol, lots, sl=sl, tp=tp, limit=limit, stop=stop)
+
+    def sell(self, symbol: str, lots: float, sl=None, tp=None,
+             limit=None, stop=None) -> None:
+        self._ctx.sell(symbol, lots, sl=sl, tp=tp, limit=limit, stop=stop)
+
+    def close(self, symbol: str) -> None:
+        self._ctx.close(symbol)
+
+    def position(self, symbol: str) -> list:
+        return self._ctx.position(symbol)
+
+    @property
+    def equity(self) -> float:
+        return self._ctx.equity
+
+    @property
+    def cash(self) -> float:
+        return self._ctx.cash
 
     # --- engine plumbing --------------------------------------------------
 
     def _bind(self, broker) -> None:
-        self._broker = broker
+        self._ctx = Context(broker)

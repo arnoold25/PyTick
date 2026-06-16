@@ -28,13 +28,29 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    """Account and broker parameters for the simulation."""
+    """Account, broker and risk parameters for the simulation.
+
+    The account is denominated in USD. Cost and risk features below all default
+    to off/zero, so a default config reproduces the plain v0.2 broker exactly.
+    """
 
     initial_capital:    float = 100_000
     leverage:           int = 30
 
     # broker
     lot_size:           float = 100_000     # base-currency units per standard lot
+
+    # costs (account currency = USD)
+    commission_per_lot: float = 0.0         # charged per lot on each side (open + close)
+    swap_long:          float = 0.0         # per lot per night held long  (+ credit / - cost)
+    swap_short:         float = 0.0         # per lot per night held short
+    swap_hour:          int = 22            # UTC hour at which swap is charged
+    triple_swap_weekday: int = 2            # weekday charged 3x (Mon=0..Sun=6); -1 disables
+
+    # prop-firm style risk stop (0 / off by default)
+    max_drawdown_pct:   float = 0.0         # halt+flatten when equity drops this % below base
+    dd_trailing:        bool = True         # base = running peak (trailing) vs initial (static)
+    daily_loss_limit:   float = 0.0         # halt when a UTC day's loss exceeds this (USD); 0 off
 
     # performance metrics
     risk_free:          float = 0.0         # annual risk-free rate (Sharpe/Sortino)

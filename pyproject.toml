@@ -4,9 +4,16 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "pytick"
-version = "0.2.0"
+version = "0.3.0"
 requires-python = ">=3.11"
-dependencies = ["numpy"]
+dependencies = ["numpy", "matplotlib"]
+
+[project.optional-dependencies]
+viz = ["matplotlib"]
+dev = ["pytest"]
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

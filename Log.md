@@ -3,6 +3,58 @@
 Newest entries first. Benchmark reference dataset: **275M ticks / ~37k hours**
 (EURUSD + AUDUSD, six years of Dukascopy tick data).
 
+## 2026-06-16
+
+Pushed the whole "Next" roadmap into the engine and bumped `0.2.0` → `0.3.0`.
+
+- **Line counts (wc -l, tracked sources):** 827 Python + 797 C++ + 324 tests;
+  README 170, Log 130. `broker.cpp` grew 304 → 511 (limit/stop, costs, risk,
+  quote conversion); the tests directory is new.
+- **Performance — bars folded into the broker.** The separate per-hour
+  `make_bar` pass is gone: `process_hour` now does one fused pass per active
+  symbol that yields the bid OHLC *and* the SL/TP extrema, returned as
+  `rep["bars"]`. Bid is scanned once instead of twice, and the ~N×37k
+  per-symbol pybind crossings vanish. Ask extrema are computed **only** when a
+  short / pending sell / buy-limit-stop on the symbol needs them, so a long-only
+  symbol still streams bid alone. **Warm full run ~2.3 s → ~1.4 s** (cold
+  unchanged at ~26 s, still page-fault bound). `make_bar` stays exported for
+  ad-hoc slicing.
+- **Strategy API — callbacks + `Context`.** New primary form
+  `bt.run(on_candle=fn, on_tick=fn2)` with `fn(ctx, bars)`; `ctx` carries
+  `buy/sell/close/position/equity/cash` and the current `hour`. No subclassing,
+  no override-detection on the callback path. The legacy `Strategy` subclass is
+  kept as a thin adapter (its helpers delegate to a bound `Context`), so old
+  code runs unchanged — verified identical results between the two styles.
+- **Broker features (all opt-in via `BacktestConfig`, default off/zero):**
+  - *Limit / stop entries.* `Order` gained `entry_type` + `trigger`; pending
+    entries gate on the hour extrema and fill at the trigger via `first_touch`,
+    carrying over until hit. A limit/stop fill skips SL/TP for its own fill hour
+    (mid-hour fill must not be matched against pre-fill ticks).
+  - *Quote-currency conversion.* Per-symbol `quote_conv` inferred from the name;
+    USD-base pairs (USDJPY/USDCAD/USDCHF) convert P&L by the pair's own price in
+    `record_close`/`mark_to_market`. **Bug fixed (caught by the USDJPY test):**
+    the leverage notional check compared a quote-currency notional to a USD cap —
+    now converted to USD, so USD-base orders are no longer falsely rejected.
+  - *Commission / swap.* Per-lot commission each side; per-night swap at
+    `swap_hour` (triple on `triple_swap_weekday`). Trades report
+    `gross_pnl`/`commission`/`swap` and net `pnl`.
+  - *Prop-firm drawdown stop.* `max_drawdown_pct` (trailing peak or static
+    initial) + optional `daily_loss_limit`, checked against **worst-case
+    intra-hour equity** (positions marked at the hour's adverse extreme); on a
+    breach the account flattens at that level and halts. Reported as
+    `rep["halted"]` / `halt_reason`; the engine stops the loop.
+- **Metrics.** Added CAGR, max drawdown, exposure %, average win/loss, profit
+  factor, expectancy alongside the existing Sharpe/Sortino; the result now
+  carries `equity_curve` + `trades` + `halted`.
+- **Visualization.** New `viz.py`; `result.plot()` draws a matplotlib 2×2
+  dashboard (equity + underwater drawdown, per-trade & cumulative P&L, return
+  histogram). matplotlib is a core dependency; `pytick[dev]` adds pytest.
+- **Verification.** 19 tests pass (synthetic in-memory broker units + tiny
+  on-disk engine integration). Regression guard: the toy example is unchanged at
+  **3,419 trades / 33.34% win / −18.33%**, proving the bar-fold and the API
+  refactor changed no fills and the cost/risk additions are truly opt-in.
+  `make_bar` equivalence asserted against the broker's `rep["bars"]`.
+
 ## 2026-06-15
 
 Project completed on the `unstable` branch: strategy interface, C++ broker

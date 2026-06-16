@@ -2,9 +2,10 @@
 
 High-performance Forex tick-data backtesting in Python, with a C++ core.
 
-> **Status: pre-1.0.** The strategy interface, the C++ broker simulation and the
-> performance metrics are implemented and run end-to-end (`unstable` branch). The
-> API is still unstable and not ready for production use.
+> **Status: pre-1.0.** The strategy interface, the C++ broker simulation,
+> performance metrics and plotting are implemented and run end-to-end
+> (`unstable` branch). Multi-symbol backtests share one synchronized account.
+> The API is settling but not yet frozen.
 
 ## Design
 
@@ -18,14 +19,14 @@ PyTick is built around a few hard rules:
   column plus an hour index. All price arrays are accessed via `mmap` — only
   the columns a backtest actually uses are ever read from disk.
 - **Python drives, C++ executes.** A Python loop iterates over hours; the C++
-  core (pybind11) does all per-tick work — fills, SL/TP scanning, equity. The
-  language boundary is crossed once per hour (~37k times for six years of data),
-  not once per tick (275M times). The opt-in `on_tick` callback trades that for
-  per-tick granularity.
+  core (pybind11) does all per-tick work — bar extrema, fills, SL/TP scanning,
+  financing, equity. The language boundary is crossed once per hour (~37k times
+  for six years of data), not once per tick (275M times). The opt-in `on_tick`
+  callback trades that for per-tick granularity.
 - **Decide at the close, no look-ahead.** Each hour the broker processes that
-  hour's ticks *before* `on_candle` runs, so the strategy always acts on a
-  completed candle. Orders it places fill on the next hour's first tick (or the
-  exact SL/TP level), never at the current open.
+  hour's ticks *before* the strategy runs, so it always acts on a completed
+  candle. Orders it places fill on the next hour's first tick (or the exact
+  SL/TP/trigger level), never at the current open.
 
 ## Data pipeline
 
@@ -51,37 +52,73 @@ Requires Python ≥ 3.11 and a C++17 compiler (developed against MSVC on
 Windows). The C++ extension is built automatically via scikit-build-core/CMake.
 
 ```
-pip install -e .
+pip install -e .            # core + plotting (numpy, matplotlib)
+pip install -e .[dev]       # + pytest
 ```
 
-Re-run after changing C++ sources.
+After changing C++ sources, rebuild. Once the build tools are in your
+environment (`pip install scikit-build-core cmake ninja pybind11`) the fast path
+is:
+
+```
+pip install -e . --no-build-isolation
+```
 
 ## Usage
 
-Subclass `Strategy`, override `on_candle`, and hand the class to `run`:
+Write an `on_candle(ctx, bars)` callback and hand it to `run`:
 
 ```python
 from pathlib import Path
-from pytick import Backtester, DataConfig, BacktestConfig, Strategy
+from pytick import Backtester, DataConfig, BacktestConfig
 
-class MyStrategy(Strategy):
-    def on_candle(self, hour, bars):
-        # bars = {"EURUSD": {"open","high","low","close"}, ...}  (bid-only)
-        bar = bars.get("EURUSD")
-        if bar is None or self.position("EURUSD"):
-            return
-        if bar["close"] > bar["open"]:                 # bullish hour
-            price = bar["close"]
-            self.buy("EURUSD", lots=1.0,
-                     sl=price - 0.0020,                # absolute prices
-                     tp=price + 0.0040)
+def on_candle(ctx, bars):
+    # bars = {"EURUSD": {"open","high","low","close"}, ...}  (bid-only)
+    bar = bars.get("EURUSD")
+    if bar is None or ctx.position("EURUSD"):
+        return
+    if bar["close"] > bar["open"]:                 # bullish hour
+        price = bar["close"]
+        ctx.buy("EURUSD", lots=1.0,
+                sl=price - 0.0020,                 # absolute prices
+                tp=price + 0.0040)
 
 bt = Backtester(
     DataConfig(data_dir=Path("data/npy"), symbols=("EURUSD", "AUDUSD")),
     BacktestConfig(),
 )
-result = bt.run(MyStrategy)
+result = bt.run(on_candle=on_candle)
 result.summary()
+result.plot()
+```
+
+Strategy state lives in your own object — pass a bound method, no base class
+needed:
+
+```python
+class Momentum:
+    def __init__(self, fast=10):
+        self.fast = fast
+        self.history = []
+    def on_candle(self, ctx, bars):
+        ...
+
+m = Momentum()
+bt.run(on_candle=m.on_candle, on_tick=m.on_tick)   # on_tick optional
+```
+
+The legacy `Strategy` subclass still works — subclass it, override `on_candle`
+(and optionally `on_tick`), and pass the class to `run`:
+
+```python
+from pytick import Strategy
+
+class MyStrategy(Strategy):
+    def on_candle(self, hour, bars):
+        if not self.position("EURUSD") and bars["EURUSD"]["close"] > bars["EURUSD"]["open"]:
+            self.buy("EURUSD", lots=1.0)
+
+bt.run(MyStrategy)
 ```
 
 Or run the bundled example via the package entry point:
@@ -92,40 +129,68 @@ python -m pytick
 
 ### Strategy API
 
-Inside `on_candle(hour, bars)` (called once per hour, at the close):
+The `ctx` handed to `on_candle(ctx, bars)` (and the `self` of a `Strategy`)
+expose the same order API:
 
-| Call                                  | Effect                                            |
-| ------------------------------------- | ------------------------------------------------- |
-| `self.buy(sym, lots, sl=None, tp=None)`  | Open a long; fills next tick at the ask        |
-| `self.sell(sym, lots, sl=None, tp=None)` | Open a short; fills next tick at the bid        |
-| `self.close(sym)`                     | Close every open position on `sym` (market)       |
-| `self.position(sym)`                  | List of open positions on `sym` (empty if flat)   |
-| `self.equity` / `self.cash`           | Account equity (incl. unrealized) / realized cash |
+| Call                                              | Effect                                            |
+| ------------------------------------------------- | ------------------------------------------------- |
+| `buy(sym, lots, sl=None, tp=None, limit=None, stop=None)`  | Open a long; market by default, or a `limit`/`stop` pending entry |
+| `sell(sym, lots, sl=None, tp=None, limit=None, stop=None)` | Open a short                             |
+| `close(sym)`                                      | Close every open position on `sym` (market)       |
+| `position(sym)`                                   | List of open positions on `sym` (empty if flat)   |
+| `equity` / `cash`                                 | Account equity (incl. unrealized) / realized cash |
 
-`sl`/`tp` are absolute prices. `on_tick(self, symbol, bid, ask)` is an opt-in
-hook: override it and the broker scans every tick and calls it for each one —
-tens of seconds for the full dataset, so use it for short windows and feature
-exploration, not production sweeps.
+`sl`/`tp`/`limit`/`stop` are absolute prices. A market order fills at the next
+tick (buy@ask, sell@bid); a `limit`/`stop` order fills at its trigger once the
+hour's range reaches it, and carries over until then.
 
-### Broker model (v1)
+`on_tick(ctx, symbol, bid, ask)` (or `on_tick(self, symbol, bid, ask)` on a
+`Strategy`) is an opt-in hook: provide it and the broker scans every tick and
+calls it for each one — tens of seconds for the full dataset, so use it for
+short windows and feature exploration, not production sweeps. On a `Strategy`
+it is wired only when the subclass actually overrides it.
 
-- **Orders:** market entries with an optional stop-loss / take-profit bracket;
-  size in standard lots (`lot_size`, default 100k base-currency units).
-- **Fills:** next tick after the order — buy at the ask, sell at the bid;
-  SL/TP fill at the exact level. No commission or swap.
-- **SL/TP scan:** gated by the hour's price extrema (fast path); a full tick
-  scan runs only when both stop and target sit inside the hour's range.
-- **P&L:** computed in the quote currency — exact in account USD for
-  USD-quoted pairs (EURUSD, AUDUSD, GBP/NZD-USD). USD-base pairs (USDJPY, …)
-  would need conversion and are out of v1 scope.
-- **Leverage** caps the maximum position notional (`equity × leverage`);
-  there is no margin call or liquidation in v1.
+### Broker model
+
+- **Account:** one shared USD account across all symbols; the hour axis is the
+  union of every symbol's hours, so capital and time are synchronized.
+- **Entries:** market entries and `limit`/`stop` pending entries, with an
+  optional stop-loss / take-profit bracket; size in standard lots (`lot_size`,
+  default 100k base-currency units).
+- **Fills:** market — next tick (buy@ask, sell@bid); limit/stop — at the trigger
+  price; SL/TP — at the exact level. SL/TP uses an extrema-gated fast path; a
+  full tick scan runs only when both stop and target lie inside the hour's range.
+- **Quote-currency conversion:** P&L is exact in account USD for USD-quoted
+  pairs (EURUSD, …) and for USD-base pairs (USDJPY, USDCAD, USDCHF), the latter
+  converted by the pair's own price. Crosses fall back to no conversion.
+- **Costs:** optional `commission_per_lot` (charged each side) and per-night
+  `swap_long`/`swap_short` (charged at `swap_hour` UTC, triple on
+  `triple_swap_weekday`). Closed trades report `gross_pnl`, `commission`, `swap`
+  and net `pnl`.
+- **Leverage** caps position notional (in USD) at `equity × leverage`.
+- **Prop-firm drawdown stop:** set `max_drawdown_pct` (trailing from the equity
+  peak, or static from initial capital with `dd_trailing=False`) and/or a
+  `daily_loss_limit`. The stop is checked against the **worst-case intra-hour
+  equity** (open positions marked at the hour's adverse extreme); on a breach
+  the account flattens and halts.
+
+All cost/risk parameters live on `BacktestConfig` and default to off/zero, so a
+default config reproduces the plain broker exactly.
 
 ### Metrics
 
-`result.summary()` reports end capital, return %, total trades, wins/losses,
-win rate, and the Sharpe & Sortino ratios (from daily equity returns,
-annualized with `ann_factor`, risk-free `risk_free`).
+`result.summary()` reports end capital, return %, CAGR, max drawdown, exposure,
+trade counts, win rate, average win/loss, profit factor, expectancy, and the
+Sharpe & Sortino ratios (from daily equity returns, annualized with
+`ann_factor`, risk-free `risk_free`). The raw `equity_curve` and `trades` are
+kept on the result for custom analysis.
+
+### Visualization
+
+`result.plot(save=None, show=True)` draws a matplotlib dashboard — equity curve
+with drawdown shading, an underwater drawdown plot, per-trade and cumulative
+P&L, and the per-trade return distribution. `save="run.png"` writes a PNG;
+`show=False` skips the window.
 
 ## Performance
 
@@ -138,9 +203,11 @@ Hourly bid-bar building over the full dataset — 275M ticks / ~37k hours:
 | C++ core (AVX2-vectorized min/max)   | ~1.35 s |
 
 A full backtest (bars + broker tick scan with an SL/TP strategy holding
-positions, two symbols) runs in **~2.3 s warm** / ~27 s cold (the first pass
-streams ~2.5 GB through mmap, page-fault bound). Measured on the development
-machine.
+positions, two symbols) runs in **~1.4 s warm** / ~26 s cold (the first pass
+streams ~2.5 GB through mmap, page-fault bound). The bar build is now folded
+into the broker's single per-hour pass — bid is scanned once instead of twice,
+and the per-symbol `make_bar` boundary crossings are gone — down from the ~2.3 s
+warm of the separate-pass design. Measured on the development machine.
 
 ## Roadmap
 
@@ -148,22 +215,26 @@ machine.
 
 - [x] Dukascopy `.bi5` converter with integrity checks
 - [x] mmap-based SoA data loader, global hour axis across symbols
-- [x] `make_bar` in the C++ core: bid-only OHLC, AVX2-vectorized, memory-bound
-- [x] `Strategy` interface: `on_candle` (per hour, all active symbols) and the
-      opt-in per-tick `on_tick` (override-detected)
-- [x] C++ broker: tick-precise market + SL/TP fills, extrema-gated SL/TP scan,
-      leverage-capped sizing, per-hour equity/position reporting
-- [x] Performance metrics: end capital, return, win rate, trade counts,
-      Sharpe & Sortino
+- [x] Bar building folded into the C++ broker's single per-hour pass
+      (bid-only OHLC, AVX2 `make_bar` still exported for ad-hoc slicing)
+- [x] Strategy API: `on_candle`/`on_tick` callbacks with a `Context`, plus the
+      legacy `Strategy` subclass
+- [x] C++ broker: market + limit/stop entries, tick-precise SL/TP fills,
+      extrema-gated scan, leverage-capped sizing, shared USD account
+- [x] Quote-currency conversion for USD-base pairs (USDJPY, …)
+- [x] Commission / swap modelling
+- [x] Prop-firm drawdown stop (worst-case intra-hour equity)
+- [x] Metrics: return, CAGR, max drawdown, exposure, win rate, profit factor,
+      expectancy, Sharpe & Sortino
+- [x] matplotlib visualization (`result.plot()`)
+- [x] pytest suite (synthetic broker + engine tests)
 
 ### Next
 
-- [ ] Limit / stop pending entries
-- [ ] Quote-currency conversion for USD-base pairs (USDJPY, …)
-- [ ] Commission / swap modelling
-- [ ] Prop-firm drawdown stop (worst-case intra-hour equity)
-- [ ] Fold bid-bar extrema into the broker scan to drop the separate `make_bar`
-      pass
+- [ ] Cross-pair conversion via a third series (EURJPY, …)
+- [ ] Partial closes / position scaling and trailing stops
+- [ ] Pending-order expiry (GTC → GTD/day orders)
+- [ ] Parameter sweeps / vectorized multi-run driver
 
 ## License
 
