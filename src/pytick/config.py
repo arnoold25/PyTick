@@ -32,3 +32,6 @@ class BacktestConfig:
 
     initial_capital:    float = 100_000
     leverage:           int = 30
+    lot_size:           int = 100_000
+    risk_free:          float = 0.0
+    ann_factor:         int = 252

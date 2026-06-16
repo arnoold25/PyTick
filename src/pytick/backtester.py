@@ -32,16 +32,24 @@ class Backtester:
             for s in idx
         }
 
-    def _iter_hour(self):
-        """Yields (hour_us, bars) per hour, where bars maps each symbol that has
-        ticks this hour to an empty slot — filled on demand by the strategy."""
+    def _iter_hour(self, data):
+        """Yields (hour_us, {symbol: OHLC bar}) for every hour with ticks."""
         for h in self.hours:
-            bars = {sym: {} for sym, span in self.spans.items() if h in span}
+            bars = {}
+            for sym, span in self.spans.items():
+                se = span.get(h)
+                if se is None:                       # symbol has no ticks this hour
+                    continue
+                start, end = se
+                # zero-copy: mmap slice is passed as a view, C++ reads the buffer directly
+                bars[sym] = make_bar(data[sym]["bid"][start:end])
             yield h, bars
+
 
     def run(self):
         t0 = time.perf_counter()
-        for h, bars in self._iter_hour():
+        data = self.loader.data
+        for h, bars in self._iter_hour(data):
             pass                                     # strategy hook goes here
         elapsed = time.perf_counter() - t0
         print(f"  [ OK ]  Backtest  {len(self.hours):>13,} hours  ->  {elapsed:.3f}s")
